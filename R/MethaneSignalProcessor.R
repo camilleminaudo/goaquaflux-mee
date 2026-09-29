@@ -8,7 +8,9 @@
 ## https://doi.org/10.1016/j.ecoinf.2026.103781
 ##
 ## Aim: reproduce the Python outputs (scipy / pandas) as closely as possible so
-## MSP results can be compared with goFlux / goAquaFlux on the same chamber data.
+## MSP results can be compared with goAquaFlux on the same chamber data
+## (compare_goAquaFlux_FluxSeparator_MSP.R). The port was checked against the
+## Python implementation with check_msp_port_parity.R.
 ##
 ## Dependencies: base R (processing) + ggplot2 (plots only).
 ##   The 'signal' package is deliberately NOT used: signal::filtfilt() zero-pads
@@ -17,12 +19,16 @@
 ##   below following the scipy algorithms.
 ##
 ## Python quirks that are reproduced on purpose (for parity) are flagged
-## "## PY-QUIRK:". Additions that do not exist in the Python tool: "## NEW:".
+## "## PY-QUIRK:". Additions that do not exist in the Python tool, and do not
+## affect its results, are flagged "## R-ONLY:".
 ## Indices that mirror Python are kept 0-based (variables ending in "0").
 ##
 ## Usage
 ##   * RStudio: edit CONFIG and Source the file.
-##   * Terminal: Rscript MethaneSignalProcessor.R --dir "C:/path/to/MSP" [--file name] [--window_peaks 5]
+##   * Terminal: Rscript R/MethaneSignalProcessor.R --dir "path/to/folder" [--file name] [--window_peaks 5]
+##     where "path/to/folder" contains a "Raw data/" sub-folder with MSP input
+##     files (tab-separated .txt, as for the Python tool); results are written
+##     to "path/to/folder/Processed data/".
 ##   * From your own code (e.g. goFlux data already in memory):
 ##       options(msp.source_only = TRUE); source("MethaneSignalProcessor.R")
 ##       res <- msp_process_signal(time_s, ch4_ppm, temp_C, pres_mmHg, cfg = CONFIG)
@@ -30,7 +36,7 @@
 
 ## ---- CONFIG -----------------------------------------------------------------
 CONFIG <- list(
-  base_dir     = "C:/Projects/myGit/MethaneSignalProcessor/",           # folder that contains "Raw data/" (Python: script folder)
+  base_dir     = file.path("results", "msp_parity", "MSP_R"),   # folder that contains "Raw data/" (Python: script folder)
   raw_dir      = NULL,          # NULL -> <base_dir>/Raw data
   output_dir   = NULL,          # NULL -> <base_dir>/Processed data
   file_name    = NULL,          # NULL -> all .txt in raw_dir; or e.g. "data" (no extension)
@@ -42,8 +48,8 @@ CONFIG <- list(
   col_ch4      = "CH4(ppm)",
   col_temp     = c("Temp", "temp"),       # first match is used
   col_pres     = "Pressure(Hg_mm)",
-  temp_C_fallback        = NULL,          ## NEW: used only if no temperature column (Python crashes)
-  pressure_mmHg_fallback = NULL,          ## NEW: used only if no pressure column (Python crashes)
+  temp_C_fallback        = NULL,          ## R-ONLY: used only if no temperature column (Python crashes)
+  pressure_mmHg_fallback = NULL,          ## R-ONLY: used only if no pressure column (Python crashes)
 
   # Chamber geometry (hard-coded in Python process_file)
   volume_m3    = 57.5*0.001,
@@ -57,7 +63,7 @@ CONFIG <- list(
   only_positive = TRUE,
 
   make_plots   = TRUE,
-  write_segments_csv = TRUE     ## NEW: table of all diffusive segments (for goFlux comparison)
+  write_segments_csv = TRUE     ## R-ONLY: table of all diffusive segments (for goFlux comparison)
 )
 
 `%||%` <- function(a, b) if (is.null(a)) b else a
@@ -508,7 +514,7 @@ msp_process_file <- function(filepath, output_dir, cfg = CONFIG, window_peaks = 
 
   utils::write.csv(df, file.path(dirs[1], paste0(base_name, "_processed.csv")), row.names = FALSE)
   msp_write_results_txt(file.path(dirs[3], paste0(base_name, "_results.txt")), base_name, res)
-  if (isTRUE(cfg$write_segments_csv) && nrow(res$segments))       ## NEW
+  if (isTRUE(cfg$write_segments_csv) && nrow(res$segments))       ## R-ONLY
     utils::write.csv(res$segments, file.path(dirs[3], paste0(base_name, "_segments.csv")), row.names = FALSE)
   if (isTRUE(cfg$make_plots)) msp_plots(df[[cfg$col_time]], df[[cfg$col_ch4]], res, base_name, dirs[2])
 

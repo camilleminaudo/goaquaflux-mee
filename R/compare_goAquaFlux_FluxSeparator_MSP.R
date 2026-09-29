@@ -1,33 +1,33 @@
 ###############################################################################
 ## compare_goAquaFlux_FluxSeparator_MSP.R
 ##
-## Objective comparison of three approaches that separate diffusive and
-## ebullitive CH4 fluxes in chamber incubations:
+## Benchmark of goAquaFlux against two published tools that separate
+## diffusive and ebullitive CH4 fluxes in chamber incubations, and against
+## conventional flux calculation without separation (manuscript Section 5,
+## Table 3; Appendix S1).
 ##
 ##   goAquaFlux     goFlux extension (find.bubbles + goFlux model selection)
-##   FluxSeparator  Sø et al. (2024, JGR-B) R package, v2.0.0
-##   MSP            MethaneSignalProcessor, Cardona et al. (2026, Ecol. Inform.)
-##                  https://doi.org/10.1016/j.ecoinf.2026.103781 (R port)
+##   FluxSeparator  Soe et al. (2024, J. Geophys. Res. Biogeosci.), v2.0.0
+##   MSP            MethaneSignalProcessor, Cardona et al. (2026, Ecol.
+##                  Inform.), run through the R port MethaneSignalProcessor.R
+##   goFlux_noSep   goFlux + best.flux on the whole incubation (no separation)
+##   endpoint       (C_end - C_start) / duration: model-free total flux,
+##                  computed for every incubation as a reference
 ##
-## Plus two references that do not separate pathways:
-##   goFlux_noSep   goFlux + best.flux on the whole incubation
-##   endpoint       (C_end - C_start) / duration: model-free total flux
-##
-## PART A  Capability table (what each approach can do)            -> CSV
-## PART B  Synthetic incubations with known truth                    -> CSV, PDF
+## PART A  Capability table (what each approach can do)
+## PART B  3,420 synthetic incubations with known fluxes and bubbles:
 ##         flux accuracy (total, diffusive, ebullitive) and bubble
 ##         identification (number, timing, magnitude)
-## PART C  Real incubations (goFlux-formatted data, autoID)          -> CSV, PDF
-##         agreement between methods, total flux vs endpoint
+## PART C  Field incubations (data/many_incubations.RData): agreement
+##         between methods and with the endpoint estimate
 ##
-## All fluxes are expressed in nmol m-2 s-1 using the same goFlux flux.term
-## (Vtot, Pcham, Area, Tcham, H2O) for every method, so that differences
-## reflect the algorithms and not the unit conversion. For FluxSeparator and
-## MSP, concentration rates (ppm or ppb per s) are taken from their outputs
-## and multiplied by that flux.term (MSP's own conversion uses a hard-coded
-## chamber geometry; FluxSeparator's ppm_to_umol is not used).
+## Harmonised units. All fluxes are expressed in nmol m-2 s-1 with the same
+## goFlux flux term (Vtot, Pcham, Area, Tcham, H2O) for every method, so that
+## differences reflect the algorithms and not the unit conversion. For
+## FluxSeparator and MSP, the concentration rates they report (ppm or ppb per
+## s) are multiplied by that flux term.
 ##
-## Where a method does not report a quantity, it is derived and flagged here:
+## Quantities a method does not report are derived as follows:
 ##   FluxSeparator total  = diffusive + ebullitive (both are FS outputs)
 ##   MSP diffusive        = mean of MSP's valid segment fluxes (as in its
 ##                          summary statistics)
@@ -37,9 +37,21 @@
 ## Bubble times: goAquaFlux t.bubble; MSP peak time; FluxSeparator time of
 ## the largest increment inside each detected event (FS gives no time).
 ##
-## Dependencies: dplyr, tidyr, purrr, ggplot2, zoo, TTR, broom, lubridate
-## + goFlux (with goAquaFlux), FluxSeparator (installed or its R/ folder),
-## MethaneSignalProcessor.R (R port).
+## Inputs   data/many_incubations.RData (Part C only)
+##          R/MethaneSignalProcessor.R, R/synthetic_incubations.R
+## Outputs  results/A_capabilities.csv
+##          results/method_comparison_synthetic/        (Part B)
+##          results/method_comparison_real_incubations/ (Part C)
+##          Each folder holds the raw results (*.rds), summary tables (*.csv),
+##          figures (*.pdf) and the R session information.
+##          Table 3 and the numbers quoted in Section 5 are computed from these
+##          results by make_Table3_method_comparison.R.
+##
+## Run time: about 1 s per incubation for all methods (about 1 h for the
+## synthetic part and 15 min for the field part on a laptop). Set
+## recompute = FALSE to reload saved results and only redo tables/figures.
+##
+## Run from the repository root: Rscript R/compare_goAquaFlux_FluxSeparator_MSP.R
 ###############################################################################
 
 
@@ -47,32 +59,34 @@
 ## 0. CONFIGURATION
 ## ============================================================================
 
-
-repo_root <- dirname(dirname(rstudioapi::getSourceEditorContext()$path))
-setwd(repo_root)
+source(file.path("R", "setup.R"))                  # paths, goFlux, BUBBLE_WINDOW
+source(file.path("R", "synthetic_incubations.R"))  # synthetic incubation generator
 
 CFG <- list(
 
-  run_synthetic = TRUE,
-  run_real      = TRUE,
-  recompute     = TRUE,     # FALSE: reload saved results and only redo stats/figures
+  run_synthetic = TRUE,     # Part B
+  run_real      = TRUE,     # Part C
+  recompute     = TRUE,     # FALSE: reload saved results, only redo tables/figures
 
-  out_dir = "C:/Projects/myGit/goaquaflux-mee/results/method_comparison",
+  out_dir_synthetic = file.path(PATHS$results, "method_comparison_synthetic"),
+  out_dir_real      = file.path(PATHS$results, "method_comparison_real_incubations"),
 
   ## --- code sources ---------------------------------------------------------
-  goflux_dir    = "C:/Projects/myGit/goFlux",   # devtools::load_all(); NULL -> library(goFlux)
   fluxsep_r_dir = NULL,     # path to FluxSeparator/R (v2.0.0); NULL -> library(FluxSeparator)
-  msp_file      = "C:/Projects/myGit/goaquaflux-mee/R/MethaneSignalProcessor.R",   # R port of MSP
+  msp_file      = file.path("R", "MethaneSignalProcessor.R"),   # R port of MSP
 
   ## --- methods to run -------------------------------------------------------
-  methods = c("goAquaFlux", "goFlux_noSep", #"goAquaFlux_w30",
-              "FS_default","MSP"),
+  ## goAquaFlux_w30 (detection window of 30 observations) is run on synthetic
+  ## incubations only, to document the choice of the default window (15).
+  methods_synthetic = c("goAquaFlux", "goAquaFlux_w30", "goFlux_noSep",
+                        "FS_default", "MSP"),
+  methods_real      = c("goAquaFlux", "goFlux_noSep", "FS_default", "MSP"),
 
-
-  ## goAquaFlux variants: name -> extra arguments passed to goAquaFlux()
+  ## goAquaFlux variants: name -> arguments passed to goAquaFlux(). The window
+  ## is given explicitly so that results do not depend on the package default.
   goaquaflux_variants = list(
-    goAquaFlux     = list(),                          # package defaults
-    goAquaFlux_w30 = list(bubble.window.size = 30)),  # find.bubbles default window
+    goAquaFlux     = list(bubble.window.size = BUBBLE_WINDOW),
+    goAquaFlux_w30 = list(bubble.window.size = 30)),
 
   ## FluxSeparator "as shipped": data passed in ppm, package default cutoffs
   fs_default = list(runvar_cutoff = 0.5, IndexSpan = 30,
@@ -80,7 +94,8 @@ CFG <- list(
                     remove_observations_prior = 200,
                     number_of_observations_used = 400,
                     number_of_observations_required = 50),
-  ## FluxSeparator tuned from the data of each incubation:
+  ## FluxSeparator tuned from the data of each incubation (method "FS_tuned";
+  ## not used in the manuscript, kept for sensitivity analyses):
   ## noise sigma = MAD(first differences)/sqrt(2), trend s = median increment
   ##   runvar_cutoff                  = 2.5 s^2 + noise_mult * sigma^2
   ##   concentration_diffusion_cutoff = s * 2 * IndexSpan + mag_noise_mult * sigma
@@ -94,12 +109,12 @@ CFG <- list(
   msp_window_peaks = 5,     # MSP default half-window for peak magnitude
 
   ## --- evaluation ------------------------------------------------------------
-  match_tol_s      = 15,    # max |t_est - t_true| to match two bubbles
+  match_tol_s       = 15,   # max |t_est - t_true| to match two bubbles
   endpoint_window_s = 10,   # s averaged at start and end for the endpoint flux
 
-  ## --- synthetic incubations ---------------------------------------------------
+  ## --- synthetic incubations (Appendix S1, Tables S3-S4) ------------------------
   syn = list(
-    n_rep = 30, seed = 20260928,
+    n_rep = 30, seed = 20260928,        # incubation j uses set.seed(seed + j)
     duration = 600, dt = 1, C0 = 2000,
     ramp = 3,         # s from bubble onset to transient peak at the analyser
     tau = 15,         # s, decay of the overshoot
@@ -111,9 +126,9 @@ CFG <- list(
     overshoot   = c(0, 1),              # transient peak excess / settled step
     chamber = list(Vtot = 20, Area = 1000, Pcham = 101.325, Tcham = 20)),  # L, cm2, kPa, degC
 
-  ## --- real incubations (same loading logic as the goFlux vs goAquaFlux script)
+  ## --- field incubations (same loading as make_Fig4_goFlux_vs_goAquaFlux.R) ----
   real = list(
-    data_file  = "C:/Projects/myGit/goaquaflux-mee/data/many_incubations.RData",
+    data_file  = PATHS$real_data,
     data_object = "mydata_all", aux_object = "myauxfile",
     aux_duration_col = "duration",   # copied to obs.length for autoID()
     shoulder = 0,
@@ -137,13 +152,10 @@ suppressPackageStartupMessages({
   library(zoo); library(TTR); library(broom); library(lubridate)
 })
 
-## goFlux / goAquaFlux
-
-devtools::load_all("C:/Projects/myGit/goFlux")   # path to the package root
 stopifnot(exists("goAquaFlux"), exists("goFlux"), exists("best.flux"),
           exists("flux.term"))
 
-## FluxSeparator: exported functions in an environment FS
+## FluxSeparator: its two exported functions, in an environment FS
 FS <- new.env()
 if (!is.null(CFG$fluxsep_r_dir)) {
   for (f in c("utils-bubble-detection.R", "utils-smoothing.R",
@@ -157,13 +169,17 @@ if (!is.null(CFG$fluxsep_r_dir)) {
 }
 stopifnot(exists("ebullitive_flux", envir = FS), exists("diffusive_flux", envir = FS))
 
-## MSP (functions only, nothing is run)
+## MSP R port (functions only, nothing is run)
 MSP <- new.env()
 options(msp.source_only = TRUE)
 source(CFG$msp_file, local = MSP)
 stopifnot(exists("msp_process_signal", envir = MSP))
 
-dir.create(CFG$out_dir, showWarnings = FALSE, recursive = TRUE)
+## Save the R session information next to the results
+write_session_info <- function(dir) {
+  dir.create(dir, showWarnings = FALSE, recursive = TRUE)
+  writeLines(capture.output(sessionInfo()), file.path(dir, "sessionInfo.txt"))
+}
 
 
 ## ============================================================================
@@ -205,7 +221,7 @@ capabilities <- tribble(
   "Diagnostics",
   "flux.plot.aqua (fitted event model redrawn)", "ggplot panels; Shiny app with manual selection", "PNG plots per file (peaks, segments, steps)"
 )
-write.csv(capabilities, file.path(CFG$out_dir, "A_capabilities.csv"), row.names = FALSE)
+write.csv(capabilities, file.path(PATHS$results, "A_capabilities.csv"), row.names = FALSE)
 
 
 ## ============================================================================
@@ -297,9 +313,13 @@ run_goAquaFlux <- function(inc, args = list()) {
   ev <- if (is.null(b) || nrow(b) == 0) empty_events() else
     data.frame(t_event = if ("t.bubble" %in% names(b)) b$t.bubble else b$start,
                t_start = b$start, t_end = b$end, magnitude_ppb = b$magnitude)
+  ## ebullition check of goAquaFlux.diagnostics() (NA with older goFlux versions)
+  chk <- if ("ebullition.check" %in% names(s)) as.character(s$ebullition.check[1]) else NA_character_
+  clo <- if ("closure" %in% names(s)) s$closure[1] else NA_real_
   list(flux = list(total = s$flux_total[1], diffusive = s$flux_diffusive[1],
                    ebullition = s$flux_ebullition[1]),
-       events = ev, note = paste(out$warnings, collapse = " | "))
+       events = ev, note = paste(out$warnings, collapse = " | "),
+       ebullition_check = chk, closure = clo)
 }
 
 ## --- goFlux without separation ----------------------------------------------
@@ -431,21 +451,25 @@ run_msp <- function(inc, window_peaks = CFG$msp_window_peaks) {
 }
 
 ## --- registry --------------------------------------------------------------------
-RUNNERS <- list()
-for (m in CFG$methods) {
-  RUNNERS[[m]] <- local({
-    mm <- m
-    if (mm %in% names(CFG$goaquaflux_variants)) {
-      function(inc) run_goAquaFlux(inc, CFG$goaquaflux_variants[[mm]])
-    } else switch(mm,
-                  goFlux_noSep = function(inc) run_goFlux_noSep(inc),
-                  FS_default   = function(inc) run_fluxseparator(inc, tuned = FALSE),
-                  # FS_tuned     = function(inc) run_fluxseparator(inc, tuned = TRUE),
-                  MSP          = function(inc) run_msp(inc),
-                  stop("Unknown method: ", mm))
-  })
+## One runner per method name; the set of methods differs between Part B and
+## Part C, so the registry is built at the start of each part.
+build_runners <- function(methods) {
+  runners <- list()
+  for (m in methods) {
+    runners[[m]] <- local({
+      mm <- m
+      if (mm %in% names(CFG$goaquaflux_variants)) {
+        function(inc) run_goAquaFlux(inc, CFG$goaquaflux_variants[[mm]])
+      } else switch(mm,
+                    goFlux_noSep = function(inc) run_goFlux_noSep(inc),
+                    FS_default   = function(inc) run_fluxseparator(inc, tuned = FALSE),
+                    FS_tuned     = function(inc) run_fluxseparator(inc, tuned = TRUE),
+                    MSP          = function(inc) run_msp(inc),
+                    stop("Unknown method: ", mm))
+    })
+  }
+  runners
 }
-METHOD_LEVELS <- c(CFG$methods, "endpoint")
 
 ## Run all methods on one incubation
 process_incubation <- function(inc) {
@@ -457,7 +481,9 @@ process_incubation <- function(inc) {
     if (!is.null(r$error)) {
       fl[[m]] <- data.frame(id = inc$id, method = m, total = NA, diffusive = NA,
                             ebullition = NA, n_events = NA, status = "error",
-                            note = r$error, check = NA, seconds = el)
+                            note = r$error, check = NA,
+                            ebullition_check = NA_character_, closure = NA_real_,
+                            seconds = el)
       next
     }
     ne <- if (is.null(r$events)) NA else nrow(r$events)
@@ -465,13 +491,17 @@ process_incubation <- function(inc) {
                           total = r$flux$total %||% NA, diffusive = r$flux$diffusive %||% NA,
                           ebullition = r$flux$ebullition %||% NA, n_events = ne,
                           status = "ok", note = r$note %||% "", check = r$check %||% NA,
+                          ebullition_check = r$ebullition_check %||% NA_character_,
+                          closure = r$closure %||% NA_real_,
                           seconds = el)
     if (!is.null(r$events) && nrow(r$events))
       ev[[m]] <- cbind(id = inc$id, method = m, r$events)
   }
   fl$endpoint <- data.frame(id = inc$id, method = "endpoint", total = endpoint_total(inc),
                             diffusive = NA, ebullition = NA, n_events = NA,
-                            status = "ok", note = "", check = NA, seconds = 0)
+                            status = "ok", note = "", check = NA,
+                            ebullition_check = NA_character_, closure = NA_real_,
+                            seconds = 0)
   list(flux = bind_rows(fl), events = bind_rows(ev))
 }
 
@@ -567,35 +597,8 @@ component_levels <- c("total", "diffusive", "ebullition")
 ## PART B. SYNTHETIC INCUBATIONS
 ## ============================================================================
 
-bubble_shape <- function(u, M, A, tau, ramp) {
-  out <- numeric(length(u))
-  if (ramp > 0) { r <- u >= 0 & u < ramp; out[r] <- (M + A) * u[r] / ramp }
-  p <- u >= ramp
-  out[p] <- M + A * exp(-(u[p] - ramp) / tau)
-  out
-}
-
-place_bubbles <- function(n, lower, upper, min_spacing, max_try = 5000) {
-  if (n == 0) return(numeric(0))
-  for (k in seq_len(max_try)) {
-    tb <- sort(round(runif(n, lower, upper)))
-    if (n == 1 || all(diff(tb) >= min_spacing)) return(tb)
-  }
-  stop("Could not place ", n, " bubbles")
-}
-
-simulate_series <- function(sc, s = CFG$syn) {
-  t  <- seq(0, s$duration - s$dt, by = s$dt)
-  tb <- place_bubbles(sc$n_bubbles, s$edge, s$duration - s$edge, s$min_spacing)
-  M  <- if (sc$n_bubbles > 0) sc$bubble_mean *
-    exp(rnorm(sc$n_bubbles, -s$size_sdlog^2 / 2, s$size_sdlog)) else numeric(0)
-  y <- s$C0 + sc$slope * t
-  for (i in seq_along(tb)) y <- y + bubble_shape(t - tb[i], M[i], sc$overshoot * M[i], s$tau, s$ramp)
-  eps <- if (s$ar1 > 0) as.numeric(arima.sim(list(ar = s$ar1), n = length(t),
-                                             sd = sc$noise_sd * sqrt(1 - s$ar1^2))) else
-                                               rnorm(length(t), 0, sc$noise_sd)
-  list(t = t, y = y + eps, tb = tb, M = M)
-}
+## The generator (bubble_shape, place_bubbles, simulate_series) is in
+## R/synthetic_incubations.R.
 
 build_synthetic <- function(s = CFG$syn) {
   g1 <- expand.grid(noise_sd = s$noise_sd, slope = s$slope, bubble_mean = s$bubble_mean,
@@ -630,7 +633,12 @@ build_synthetic <- function(s = CFG$syn) {
 
 if (CFG$run_synthetic) {
 
-  f_syn <- file.path(CFG$out_dir, "B_synthetic_results.rds")
+  OUT <- CFG$out_dir_synthetic
+  dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
+  RUNNERS <- build_runners(CFG$methods_synthetic)
+  METHOD_LEVELS <- c(CFG$methods_synthetic, "endpoint")
+
+  f_syn <- file.path(OUT, "B_synthetic_results.rds")
   if (CFG$recompute || !file.exists(f_syn)) {
     syn <- build_synthetic()
     t_start <- Sys.time()
@@ -689,7 +697,7 @@ if (CFG$run_synthetic) {
               .groups = "drop")
 
   ## --- B2. Bubble identification ---------------------------------------------------
-  ev_methods <- setdiff(CFG$methods, "goFlux_noSep")
+  ev_methods <- setdiff(CFG$methods_synthetic, "goFlux_noSep")
   ev_eval <- evaluate_events(ev, truth_ev, truth_flux$id, ev_methods)
   det_per_inc <- ev_eval$per_inc %>%
     left_join(truth_flux %>% select(id, noise_sd, slope, bubble_mean, n_bubbles, overshoot),
@@ -725,17 +733,17 @@ if (CFG$run_synthetic) {
     summarise(n_matched = n(), med_mag_rel_err = median(mag_rel_err), .groups = "drop")
 
   ## --- save tables --------------------------------------------------------------------
-  write.csv(fl, file.path(CFG$out_dir, "B_flux_per_incubation.csv"), row.names = FALSE)
-  write.csv(ev, file.path(CFG$out_dir, "B_events_per_incubation.csv"), row.names = FALSE)
-  write.csv(truth_flux, file.path(CFG$out_dir, "B_truth_flux.csv"), row.names = FALSE)
-  write.csv(truth_ev, file.path(CFG$out_dir, "B_truth_events.csv"), row.names = FALSE)
-  write.csv(flux_summary, file.path(CFG$out_dir, "B_flux_summary.csv"), row.names = FALSE)
-  write.csv(flux_by_factor, file.path(CFG$out_dir, "B_flux_by_factor.csv"), row.names = FALSE)
-  write.csv(false_ebul, file.path(CFG$out_dir, "B_false_ebullition_no_bubbles.csv"), row.names = FALSE)
-  write.csv(det_summary, file.path(CFG$out_dir, "B_detection_summary.csv"), row.names = FALSE)
-  write.csv(det_by_snr, file.path(CFG$out_dir, "B_detection_by_snr.csv"), row.names = FALSE)
-  write.csv(pair_summary, file.path(CFG$out_dir, "B_timing_magnitude_summary.csv"), row.names = FALSE)
-  write.csv(pairs, file.path(CFG$out_dir, "B_matched_events.csv"), row.names = FALSE)
+  write.csv(fl, file.path(OUT, "B_flux_per_incubation.csv"), row.names = FALSE)
+  write.csv(ev, file.path(OUT, "B_events_per_incubation.csv"), row.names = FALSE)
+  write.csv(truth_flux, file.path(OUT, "B_truth_flux.csv"), row.names = FALSE)
+  write.csv(truth_ev, file.path(OUT, "B_truth_events.csv"), row.names = FALSE)
+  write.csv(flux_summary, file.path(OUT, "B_flux_summary.csv"), row.names = FALSE)
+  write.csv(flux_by_factor, file.path(OUT, "B_flux_by_factor.csv"), row.names = FALSE)
+  write.csv(false_ebul, file.path(OUT, "B_false_ebullition_no_bubbles.csv"), row.names = FALSE)
+  write.csv(det_summary, file.path(OUT, "B_detection_summary.csv"), row.names = FALSE)
+  write.csv(det_by_snr, file.path(OUT, "B_detection_by_snr.csv"), row.names = FALSE)
+  write.csv(pair_summary, file.path(OUT, "B_timing_magnitude_summary.csv"), row.names = FALSE)
+  write.csv(pairs, file.path(OUT, "B_matched_events.csv"), row.names = FALSE)
 
   cat("\n==== B. Flux accuracy (synthetic) ====\n")
   print(as.data.frame(flux_summary %>% mutate(across(where(is.numeric), ~ round(.x, 3)))), row.names = FALSE)
@@ -810,7 +818,7 @@ if (CFG$run_synthetic) {
     theme_bw(base_size = 9) + theme(axis.text.x = element_text(angle = 45, hjust = 1),
                                     legend.position = "none")
 
-  pdf(file.path(CFG$out_dir, "B_synthetic_figures.pdf"), width = 11, height = 8)
+  pdf(file.path(OUT, "B_synthetic_figures.pdf"), width = 11, height = 8)
   print(p_flux); print(p_relerr); print(p_det); print(p_count); print(p_timing); print(p_mag)
   ## example incubations: one per bubble count, mid noise, overshoot 1
   mid <- function(x) { u <- sort(unique(x[!is.na(x)])); u[ceiling(length(u) / 2)] }
@@ -827,6 +835,8 @@ if (CFG$run_synthetic) {
                                           i, tf$noise_sd, tf$slope, tf$n_bubbles, tf$bubble_mean, tf$overshoot)))
   }
   dev.off()
+  write_session_info(OUT)
+  cat("\nSynthetic-incubation outputs in", normalizePath(OUT), "\n")
 }
 
 
@@ -865,7 +875,12 @@ load_real_incubations <- function(rc = CFG$real) {
 if (CFG$run_real) {
 
   stopifnot(exists("autoID"))
-  f_real <- file.path(CFG$out_dir, "C_real_results.rds")
+  OUT <- CFG$out_dir_real
+  dir.create(OUT, showWarnings = FALSE, recursive = TRUE)
+  RUNNERS <- build_runners(CFG$methods_real)
+  METHOD_LEVELS <- c(CFG$methods_real, "endpoint")
+
+  f_real <- file.path(OUT, "C_real_results.rds")
   if (CFG$recompute || !file.exists(f_real)) {
     real <- load_real_incubations()
     cat("\nReal incubations loaded:", length(real$incs), "| skipped:", nrow(real$skipped), "\n")
@@ -924,7 +939,7 @@ if (CFG$run_real) {
               ccc = ccc(est, ref), .groups = "drop")
 
   ## --- C4. Event agreement between methods -------------------------------------------
-  ev_methods_r <- setdiff(CFG$methods, "goFlux_noSep")
+  ev_methods_r <- setdiff(CFG$methods_real, "goFlux_noSep")
   ref_ev <- evr %>% filter(method == ref_m) %>% select(id, t_event, magnitude_ppb)
   ev_agree <- evaluate_events(evr, ref_ev, ids_r, setdiff(ev_methods_r, ref_m))
   ev_agree_summary <- ev_agree$per_inc %>%
@@ -943,14 +958,14 @@ if (CFG$run_real) {
     pivot_wider(names_from = method, values_from = has)
 
   ## --- save + print -------------------------------------------------------------------------
-  write.csv(real$skipped, file.path(CFG$out_dir, "C_skipped_incubations.csv"), row.names = FALSE)
-  write.csv(flr, file.path(CFG$out_dir, "C_flux_per_incubation.csv"), row.names = FALSE)
-  write.csv(evr, file.path(CFG$out_dir, "C_events_per_incubation.csv"), row.names = FALSE)
-  write.csv(avail, file.path(CFG$out_dir, "C_availability_events.csv"), row.names = FALSE)
-  write.csv(vs_endpoint, file.path(CFG$out_dir, "C_total_vs_endpoint.csv"), row.names = FALSE)
-  write.csv(pairwise, file.path(CFG$out_dir, "C_pairwise_vs_reference.csv"), row.names = FALSE)
-  write.csv(ev_agree_summary, file.path(CFG$out_dir, "C_event_agreement.csv"), row.names = FALSE)
-  write.csv(has_ev, file.path(CFG$out_dir, "C_has_ebullition_by_method.csv"), row.names = FALSE)
+  write.csv(real$skipped, file.path(OUT, "C_skipped_incubations.csv"), row.names = FALSE)
+  write.csv(flr, file.path(OUT, "C_flux_per_incubation.csv"), row.names = FALSE)
+  write.csv(evr, file.path(OUT, "C_events_per_incubation.csv"), row.names = FALSE)
+  write.csv(avail, file.path(OUT, "C_availability_events.csv"), row.names = FALSE)
+  write.csv(vs_endpoint, file.path(OUT, "C_total_vs_endpoint.csv"), row.names = FALSE)
+  write.csv(pairwise, file.path(OUT, "C_pairwise_vs_reference.csv"), row.names = FALSE)
+  write.csv(ev_agree_summary, file.path(OUT, "C_event_agreement.csv"), row.names = FALSE)
+  write.csv(has_ev, file.path(OUT, "C_has_ebullition_by_method.csv"), row.names = FALSE)
 
   cat("\n==== C. Availability and events (real) ====\n")
   print(as.data.frame(avail %>% mutate(across(where(is.numeric), ~ round(.x, 3)))), row.names = FALSE)
@@ -995,12 +1010,12 @@ if (CFG$run_real) {
     labs(x = NULL, y = "Ebullition / total", title = "Ebullition fraction") +
     theme_bw(base_size = 9) + theme(legend.position = "none")
 
-  pdf(file.path(CFG$out_dir, "C_real_figures.pdf"), width = 11, height = 8)
+  pdf(file.path(OUT, "C_real_figures.pdf"), width = 11, height = 8)
   print(p_ep); print(p_pw); print(p_nev); print(p_frac)
   set.seed(2)
   for (i in sample(ids_r, min(CFG$real$n_example_plots, length(ids_r))))
     print(plot_incubation(real$incs[[i]], evr, title = i))
   dev.off()
+  write_session_info(OUT)
+  cat("\nField-incubation outputs in", normalizePath(OUT), "\n")
 }
-
-cat("\nOutputs in", normalizePath(CFG$out_dir), "\n")

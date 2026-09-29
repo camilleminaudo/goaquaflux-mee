@@ -1,11 +1,31 @@
-## Combine several flux.plot.aqua() figures with a single, complete legend.
+###############################################################################
+## combine_aqua_plots.R
 ##
-## patchwork's guides = "collect" only merges legends that are drawn
-## identically. Figures of different gases or incubations contain different
-## layers and categories (e.g. bubble fits on CH4 only, "outside diffusive
-## window" on CO2 only), so their legends differ and are all kept. Here the
-## scales of all figures are first given the union of their categories, then
-## one legend is drawn once below the panels.
+## Helper to assemble several flux.plot.aqua() figures (e.g. CH4 and CO2 of
+## the same incubation) into one multi-panel figure with a single, complete
+## legend. Used by make_Fig3_goAquaFlux_demo.R (Figure 3).
+##
+## Why: patchwork's plot_layout(guides = "collect") only merges legends that
+## are drawn identically. Figures of different gases contain different layers
+## and categories (e.g. bubble fits on CH4 only, "outside diffusive window" on
+## CO2 only), so their legends differ and are all kept. Here the scales of all
+## figures are first given the union of their categories, then one legend is
+## drawn once below the panels.
+###############################################################################
+
+
+#' Combine flux.plot.aqua() figures with one shared legend
+#'
+#' @param plots List of ggplot objects returned by flux.plot.aqua().
+#' @param ncol Integer; number of columns of panels.
+#' @param merge_fit_labels Logical; if TRUE, the keys "diffusive fit (LM)" and
+#'   "diffusive fit (HM)" are merged into one key "diffusive fit (best model)"
+#'   (both are drawn in the same colour; each panel caption names its model).
+#' @param legend_height Numeric; height of the legend row relative to the
+#'   panels (increase if the legend wraps onto several rows).
+#' @return A patchwork object: the panels, with the legend below them. Use
+#'   plot_annotation(tag_levels = list(c("a", "b", ""))) to tag the panels
+#'   (the legend is the last element and gets an empty tag).
 combine_aqua_plots <- function(plots, ncol = length(plots), merge_fit_labels = FALSE,
                                legend_height = 0.12) {
   built <- lapply(plots, ggplot2::ggplot_build)

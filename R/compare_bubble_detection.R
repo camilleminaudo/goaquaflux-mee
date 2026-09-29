@@ -1,7 +1,15 @@
 ###############################################################################
-## compare_bubble_detection.R
+## compare_bubble_detection.R   (supplementary; development benchmark)
 ##
-## Benchmark of two ebullition-detection approaches on synthetic floating-
+## Benchmark of the bubble-detection STEP ALONE, used while developing
+## find.bubbles() to compare detection variants (dispersion metric, window
+## size, magnitude model) with the detection of FluxSeparator. It is not
+## needed to reproduce the figures and tables of the manuscript, which rely on
+## compare_goAquaFlux_FluxSeparator_MSP.R (full flux estimates of all methods).
+## Its synthetic design differs from that benchmark (ramp = 1 s; noise 2, 20
+## and 200 ppb; slopes 0.05, 0.5 and 3 ppb s-1).
+##
+## Two ebullition-detection approaches are compared on synthetic floating-
 ## chamber incubations with a known ground truth:
 ##
 ##   * goFlux::find.bubbles()  (rolling dispersion + adaptive threshold +
@@ -27,8 +35,9 @@
 ##                data are passed in ppm, magnitudes converted back to ppb)
 ##   FS_oracle    FluxSeparator with cutoffs scaled using the TRUE noise and
 ##                slope (best case; not available in practice)
-##   gF_diff      find.bubbles, method "diff", window 30 (goAquaFlux defaults)
-##   gF_diff_w15  find.bubbles, method "diff", window 15 (find.bubbles default)
+##   gF_diff      find.bubbles, method "diff", window 30
+##   gF_diff_w15  find.bubbles, method "diff", window 15 (default used in the
+##                manuscript)
 ##   gF_variance  find.bubbles, method "variance", window 30
 ##   gF_step      find.bubbles, "diff", plain step model, no ramp exclusion
 ##                (ablation of the re-equilibration model)
@@ -41,17 +50,18 @@
 
 ## ---- 0. Settings -----------------------------------------------------------
 
-## Path or URL to goFlux's find.bubbles.R (use your local clone while
-## developing, so the benchmark tracks your working version).
-GOFLUX_FIND_BUBBLES <- "C:/Projects/myGit/goFlux/R/find.bubbles.R"
+## find.bubbles() is taken from goFlux, loaded by R/setup.R (installed package,
+## or a local clone given by the environment variable GOFLUX_DIR).
+source(file.path("R", "setup.R"))
 
-## Optional: path to FluxSeparator's R/ folder (v2.0.0) to run the fidelity
-## check of section 7. Set to NULL to skip.
-FLUXSEP_R_DIR <- "C:/Projects/myGit/FluxSeparator/R"   # e.g. "~/git/FluxSeparator/R"
+## Optional: path to FluxSeparator's R/ folder (v2.0.0, source code from
+## https://github.com/JonasStage/FluxSeparator) to run the fidelity check of
+## section 7. Set to NULL to skip.
+FLUXSEP_R_DIR <- NULL
 
 N_REP    <- 30          # replicate incubations per scenario
 N_CORES  <- 1           # > 1 uses parallel::mclapply (not on Windows)
-OUT_DIR  <- "bubble_benchmark_1s"
+OUT_DIR  <- file.path("results", "supplementary_bubble_detection_benchmark")
 BASE_SEED <- 20260924
 MATCH_TOL <- 5          # s; tolerance when matching true bubbles to events
 
@@ -63,7 +73,6 @@ suppressPackageStartupMessages({
   library(ggplot2)
 })
 
-source(GOFLUX_FIND_BUBBLES)
 stopifnot(exists("find.bubbles"))
 dir.create(OUT_DIR, showWarnings = FALSE, recursive = TRUE)
 

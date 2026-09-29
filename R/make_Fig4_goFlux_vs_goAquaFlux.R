@@ -1,379 +1,222 @@
+###############################################################################
+## make_Fig4_goFlux_vs_goAquaFlux.R
+##
+## Field-scale comparison of CH4 and CO2 fluxes estimated with and without
+## flux separation (manuscript Section 4, Figure 4):
+##   * goFlux + best.flux on the whole incubation (conventional calculation,
+##     no separation);
+##   * goAquaFlux (bubbles detected on CH4; diffusive flux on a bubble-free
+##     window, ebullitive flux from the bubble steps).
+##
+## Steps
+##   1. for each incubation of data/many_incubations.RData: identify the
+##      measurement window (autoID) and compute both estimates for CH4 and
+##      CO2 (skipped when recompute = FALSE: saved results are reloaded);
+##   2. summary numbers quoted in Section 4;
+##   3. Figure 4: total CH4 flux (a) and diffusive CO2 flux (b), with vs
+##      without separation, point size = ebullitive share of the CH4 flux.
+##
+## Incubations are skipped when they have no measurements, or when the start
+## time of the auxiliary file is more than 5 s before the first measurement
+## (clock mismatch, which would truncate the incubation). Skipped and failed
+## incubations are logged with the reason.
+##
+## Inputs   data/many_incubations.RData
+## Outputs  results/goFlux_vs_goAquaFlux/data_goFlux_vs_goAquaFlux.RData
+##          results/goFlux_vs_goAquaFlux/Fig4_summary.csv  (Section 4 numbers)
+##          results/figures/Fig4_goFlux_vs_goAquaFlux.jpeg / .svg
+##
+## Units: CH4 fluxes in nmol m-2 s-1, CO2 fluxes in umol m-2 s-1 (goFlux).
+##
+## Run from the repository root: Rscript R/make_Fig4_goFlux_vs_goAquaFlux.R
+###############################################################################
 
-# ============================================================================
-# SCRIPT: Comparison of goFlux vs goAquaFlux for CH4 and CO2 flux estimates
-# ============================================================================
-#
-# DESCRIPTION:
-# This script processes a batch of aquatic chamber incubations to quantify
-# greenhouse gas (CH4 and CO2) fluxes using two methodological approaches:
-#   - goFlux: traditional flux calculation (no flux separation)
-#   - goAquaFlux: flux separation method accounting for ebullitive pathways
-#
-# The analysis compares flux estimates between methods, calculates the 
-# contribution of ebullition to total CH4 flux, and generates publication-ready
-# comparison plots. Includes robust error handling for missing or problematic
-# data files, and tracks failed incubations for quality control.
-#
-# OUTPUT:
-#   - CH4_goFlux, CH4_goAquaFlux: CH4 flux results (both methods)
-#   - CO2_goFlux, CO2_goAquaFlux: CO2 flux results (both methods)
-#   - failed_incubations: log of incubations that failed processing
-#   - df.no_measurements: log of incubations lacking required data
-#   - Fig3_goFlux_vs_goAquaFlux_R4Cs.jpeg: comparison figure
-#
-# NOTES:
-#   - Requires goFlux package with autoID, goFlux, goAquaFlux, best.flux functions
-#   - Tolerance for timing mismatches between auxiliary file and measurements: ±5 sec
-#   - Ebullition ratios <0 or >1 are treated as invalid and set to NA
-#
-# ============================================================================
+source(file.path("R", "setup.R"))   # paths, goFlux, BUBBLE_WINDOW
 
-# Clear workspace and console
-rm(list = ls())
-cat("\014")
+suppressPackageStartupMessages({
+  library(ggplot2)
+  library(egg)       # theme_article()
+  library(dplyr)
+})
 
-
-# ---- Loading libraries and functions ----
-
-library(ggplot2)     # For plotting (ggplot, geom_point, scale_*_log10, etc.)
-library(egg)         # For theme_article()
-library(goFlux)      # For autoID, goFlux, goAquaFlux, best.flux
-
-
-repo_root <- dirname(dirname(rstudioapi::getSourceEditorContext()$path))
-
-devtools::load_all("C:/Projects/myGit/goFlux")   # path to the package root
-
-
-# ---- Setting paths to directories ----
-data_path <- paste0(repo_root,"/data")
-results_path <- paste0(repo_root,"/results")
+recompute   <- TRUE     # FALSE: reload the saved fluxes and only redo the figure
+time_tol_s  <- 5        # max. lag of aux start time before the first measurement
+out_dir     <- file.path(PATHS$results, "goFlux_vs_goAquaFlux")
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
+res_file    <- file.path(out_dir, "data_goFlux_vs_goAquaFlux.RData")
 
 
-compute_it = F
+## ---- 1. Fluxes with and without separation -------------------------------------
+if (recompute) {
 
+  load(PATHS$real_data)                         # mydata_all, myauxfile
+  myauxfile$obs.length <- myauxfile$duration    # observation length for autoID()
 
-# ---- Loading data ----
-setwd(data_path)
-load("many_incubations.RData")
+  CH4_goFlux <- CH4_goAquaFlux <- CO2_goFlux <- CO2_goAquaFlux <- NULL
+  skipped <- NULL                               # incubations not processed, with reason
 
-myauxfile$obs.length <- myauxfile$duration
-
-# ---- Running for all data available ----
-
-if (compute_it){
-  
-  CH4_goFlux <- CH4_goAquaFlux <- CO2_goFlux <- CO2_goAquaFlux <- df.no_measurements <- NULL
-  failed_incubations <- NULL  # Track incubations with timing issues
-  
   list_ids <- sort(unique(myauxfile$UniqueID))
-  for (k in seq_along(list_ids)){
-    i = list_ids[k]
-    message(paste0("processing ", i))
-    
-    myauxfile_i <- myauxfile[which(myauxfile$UniqueID==i),]
-    
-    if(dim(myauxfile_i)[1]==0){
-      message(paste0("Could not find corresponding myauxfile for ", i))
-      df.no_measurements <- rbind(df.no_measurements,
-                                  data.frame(UniqueID=i,
-                                             message = "no myauxfile"))
-    } else {
-      mydata <- mydata_all[which(mydata_all$UniqueID==i),]
-      
-      if(dim(mydata)[1]==0){
-        df.no_measurements <- rbind(df.no_measurements,
-                                    data.frame(UniqueID=i,
-                                               message = "no measurements"))
-      } else {
-        
-        # ---- Check time tolerance ----
-        data_start_time <- min(mydata$POSIX.time)
-        aux_start_time <- myauxfile_i$start.time[1]
-        time_diff <- as.numeric(difftime(data_start_time, aux_start_time, units = "secs"))
-        
-        if(time_diff < -5){  # If aux start time is more than 5 secs before data
-          message(paste0("WARNING: Auxiliary start time is ", abs(time_diff), 
-                         " seconds before first measurement. Skipping incubation ", i))
-          failed_incubations <- rbind(failed_incubations,
-                                      data.frame(UniqueID = i,
-                                                 aux_start_time = aux_start_time,
-                                                 data_start_time = data_start_time,
-                                                 time_diff_secs = time_diff,
-                                                 message = "start time before data range"))
-          next  # Skip to next iteration
-        }
-        
-        # ---- Process normally ----
-        IDed <- autoID(inputfile = mydata, auxfile = myauxfile_i, shoulder = 0)
-        
-        tryCatch({
-          CO2_goFlux_i <- goFlux(dataframe = IDed, gastype = "CO2dry_ppm", H2O_col = "H2O_ppm")
-          CO2_goFlux_i <- best.flux(CO2_goFlux_i)
-          
-          CO2_goAquaFlux_i <- goAquaFlux(dataframe = IDed, gastype = "CO2dry_ppm", bubble_gas = "CH4dry_ppb",
-                                         use_bubble_detection = TRUE, H2O_col = "H2O_ppm", 
-                                         bubble.method = "diff")
-          
-          CO2_goFlux <- rbind(CO2_goFlux, CO2_goFlux_i)
-          CO2_goAquaFlux <- rbind(CO2_goAquaFlux, CO2_goAquaFlux_i$flux_summary)
-          
-          CH4_goFlux_i <- goFlux(dataframe = IDed, gastype = "CH4dry_ppb", H2O_col = "H2O_ppm")
-          CH4_goFlux_i <- best.flux(CH4_goFlux_i)
-          
-          CH4_goAquaFlux_i <- goAquaFlux(dataframe = IDed, gastype = "CH4dry_ppb", 
-                                         use_bubble_detection = TRUE, H2O_col = "H2O_ppm", 
-                                         bubble.method = "diff")
-          
-          CH4_goFlux <- rbind(CH4_goFlux, CH4_goFlux_i)
-          CH4_goAquaFlux <- rbind(CH4_goAquaFlux, CH4_goAquaFlux_i$flux_summary)
-          
-        }, error = function(e){
-          failed_incubations <<- rbind(failed_incubations,
-                                       data.frame(UniqueID = i,
-                                                  aux_start_time = NA,
-                                                  data_start_time = NA,
-                                                  time_diff_secs = NA,
-                                                  message = conditionMessage(e)))
-          warning("Error processing ", i, ": ", conditionMessage(e))
-        })
-      }
+  for (i in list_ids) {
+    message("processing ", i)
+    aux_i  <- myauxfile[myauxfile$UniqueID == i, ]
+    data_i <- mydata_all[mydata_all$UniqueID == i, ]
+
+    if (nrow(data_i) == 0) {
+      skipped <- rbind(skipped, data.frame(UniqueID = i, reason = "no measurements"))
+      next
     }
+
+    ## Clock check: skip if the auxiliary start time precedes the data
+    time_diff <- as.numeric(difftime(min(data_i$POSIX.time), aux_i$start.time[1],
+                                     units = "secs"))
+    if (time_diff < -time_tol_s) {
+      skipped <- rbind(skipped, data.frame(
+        UniqueID = i, reason = sprintf("aux start time %.0f s before data", -time_diff)))
+      next
+    }
+
+    IDed <- autoID(inputfile = data_i, auxfile = aux_i, shoulder = 0)
+
+    tryCatch({
+      ## CO2: no separation, and separation with bubbles detected on CH4
+      co2_nosep <- best.flux(goFlux(dataframe = IDed, gastype = "CO2dry_ppm",
+                                    H2O_col = "H2O_ppm"))
+      co2_sep   <- goAquaFlux(dataframe = IDed, gastype = "CO2dry_ppm",
+                              bubble_gas = "CH4dry_ppb", use_bubble_detection = TRUE,
+                              H2O_col = "H2O_ppm", bubble.method = "diff",
+                              bubble.window.size = BUBBLE_WINDOW)
+      ## CH4: no separation, and separation
+      ch4_nosep <- best.flux(goFlux(dataframe = IDed, gastype = "CH4dry_ppb",
+                                    H2O_col = "H2O_ppm"))
+      ch4_sep   <- goAquaFlux(dataframe = IDed, gastype = "CH4dry_ppb",
+                              bubble_gas = "CH4dry_ppb", use_bubble_detection = TRUE,
+                              H2O_col = "H2O_ppm", bubble.method = "diff",
+                              bubble.window.size = BUBBLE_WINDOW)
+
+      ## Results are appended only when all four estimates succeeded, so that
+      ## the four tables always contain the same incubations.
+      CO2_goFlux     <- rbind(CO2_goFlux, co2_nosep)
+      CO2_goAquaFlux <- rbind(CO2_goAquaFlux, co2_sep$flux_summary)
+      CH4_goFlux     <- rbind(CH4_goFlux, ch4_nosep)
+      CH4_goAquaFlux <- rbind(CH4_goAquaFlux, ch4_sep$flux_summary)
+    }, error = function(e) {
+      skipped <<- rbind(skipped, data.frame(UniqueID = i, reason = conditionMessage(e)))
+      warning("Error processing ", i, ": ", conditionMessage(e))
+    })
   }
-  
-  # ---- Summary ----
-  message("\n--- Processing Summary ---")
-  if(!is.null(failed_incubations)){
-    message("Failed incubations: ", nrow(failed_incubations))
-    print(failed_incubations)
-  }
-  
-  
-  setwd(dir = results_path)
-  save(list = c("df.no_measurements", "failed_incubations",
-                "CH4_goFlux", "CH4_goAquaFlux", "CO2_goFlux", "CO2_goAquaFlux"),
-       file = "data_goFlux_vs_goAquaFlux.RData")
-  
+
+  message("\nProcessed: ", nrow(CH4_goAquaFlux), " incubations; skipped or failed: ",
+          if (is.null(skipped)) 0 else nrow(skipped))
+  save(CH4_goFlux, CH4_goAquaFlux, CO2_goFlux, CO2_goAquaFlux, skipped, file = res_file)
+  writeLines(capture.output(sessionInfo()), file.path(out_dir, "sessionInfo.txt"))
+
 } else {
-  setwd(dir = results_path)
-  load("data_goFlux_vs_goAquaFlux.RData")
+  load(res_file)
 }
 
 
+## ---- 2. Merge and summary numbers (Section 4) -------------------------------------
+## Estimates are matched by UniqueID.
+ch4 <- CH4_goAquaFlux %>%
+  mutate(flux_no_separation = CH4_goFlux$best.flux[match(UniqueID, CH4_goFlux$UniqueID)],
+         bubbling = !is.na(flux_ebullition) & flux_ebullition > 0,
+         ## ebullitive share of the total CH4 flux; values outside [0, 1]
+         ## (e.g. negative diffusive flux) are not interpretable and set to NA
+         ebullition_contribution = flux_ebullition / flux_total,
+         ebullition_contribution = ifelse(ebullition_contribution < 0 |
+                                            ebullition_contribution > 1,
+                                          NA, ebullition_contribution))
 
-CH4_goAquaFlux$best.flux_no_separation = CH4_goFlux$best.flux
-CH4_goAquaFlux$LM.flux_no_separation = CH4_goFlux$LM.flux
+co2 <- CO2_goAquaFlux %>%
+  mutate(flux_no_separation = CO2_goFlux$best.flux[match(UniqueID, CO2_goFlux$UniqueID)],
+         ebullition_contribution = ch4$ebullition_contribution[match(UniqueID, ch4$UniqueID)],
+         bubbling = ch4$bubbling[match(UniqueID, ch4$UniqueID)])
 
-# CH4_goAquaFlux$UniqueID[which(CH4_goAquaFlux$flux_total<0)]
+b <- ch4$bubbling
+ratio_ch4 <- ch4$flux_no_separation[b] / ch4$flux_diffusive[b]      # conventional / diffusive
+ratio_ch4 <- ratio_ch4[is.finite(ratio_ch4) & ratio_ch4 > 0]
+ratio_co2 <- abs(co2$flux_no_separation[co2$bubbling %in% TRUE]) /
+  abs(co2$flux_diffusive[co2$bubbling %in% TRUE])
+ratio_co2 <- ratio_co2[is.finite(ratio_co2)]
+
+summary_s4 <- data.frame(
+  quantity = c(
+    "incubations processed",
+    "incubations skipped or failed",
+    "incubations with >= 1 detected bubble",
+    "share of incubations with >= 1 detected bubble",
+    "incubations with ebullition > 10% of the total CH4 flux",
+    "median ebullitive share of the CH4 flux (bubbling incubations)",
+    "ebullitive share of the CH4 flux summed over the dataset",
+    "median ratio conventional / goAquaFlux diffusive CH4 flux (bubbling)",
+    "share of bubbling incubations with that ratio > 2",
+    "median ratio |conventional| / |goAquaFlux diffusive| CO2 flux (bubbling)"),
+  value = c(
+    nrow(ch4),
+    if (is.null(skipped)) 0 else nrow(skipped),
+    sum(b),
+    mean(b),
+    sum(ch4$ebullition_contribution > 0.1, na.rm = TRUE),
+    median(ch4$ebullition_contribution[b], na.rm = TRUE),
+    sum(ch4$flux_ebullition, na.rm = TRUE) / sum(ch4$flux_total, na.rm = TRUE),
+    median(ratio_ch4),
+    mean(ratio_ch4 > 2),
+    median(ratio_co2)))
+print(summary_s4, row.names = FALSE)
+write.csv(summary_s4, file.path(out_dir, "Fig4_summary.csv"), row.names = FALSE)
 
 
-CH4_goAquaFlux_sel <- CH4_goAquaFlux#[CH4_goAquaFlux$flux_total>0 & CH4_goAquaFlux$flux_diffusive>0,]
-# CH4_goAquaFlux_sel <- CH4_goAquaFlux_sel[!is.na(CH4_goAquaFlux_sel$flux_total),]
-
-CH4_goAquaFlux_sel$ebullition_contribution <- CH4_goAquaFlux_sel$flux_ebullition/CH4_goAquaFlux_sel$flux_total
-CH4_goAquaFlux_sel$ebullition_contribution[CH4_goAquaFlux_sel$ebullition_contribution<0] <- NA
-CH4_goAquaFlux_sel$ebullition_contribution[CH4_goAquaFlux_sel$ebullition_contribution>1] <- NA
-
-
-summary(CH4_goAquaFlux_sel$ebullition_contribution )
-summary(CH4_goAquaFlux_sel$flux_diffusive )
-
-
-
-lab_x <- expression(atop(F[CH[4]~tot]^goFlux*" [nmol "*m^-2*" "*s^-1*"]",
-                         "no flux separation"))
-lab_y <- expression(atop(F[CH[4]~tot]^goAquaFlux*" [nmol "*m^-2*" "*s^-1*"]",
-                         "with flux separation"))
+## ---- 3. Figure 4 ------------------------------------------------------------------------
 lab_s <- expression(atop("Ebullition ratio",
                          F[CH[4]~ebull]^goAquaFlux*" / "*F[CH[4]~tot]^goAquaFlux))
 
-plt_ch4 <- ggplot(CH4_goAquaFlux_sel,
-                  aes(best.flux_no_separation, flux_total, size = ebullition_contribution)) +
-  geom_abline(slope = 1, intercept = 0,
-              # linetype = "dashed",
-              colour = "grey40", linewidth = 0.4) +
-  geom_point(alpha = 0.75, shape = 21, fill = "#F2B876", colour = "#E29338",
-             stroke = 0.5) +
-  scale_x_log10() +
-  scale_y_log10() +
+theme_fig4 <- theme_article() +
+  theme(legend.position      = c(0.02, 0.98),
+        legend.justification = c(0, 1),
+        legend.background    = element_rect(fill = alpha("white", 0.75), colour = NA),
+        legend.title         = element_text(size = 9, lineheight = 0.9),
+        legend.text          = element_text(size = 8),
+        legend.key.height    = unit(0.9, "lines"),
+        axis.title           = element_text(lineheight = 1.0))
+
+## (a) CH4: total flux with vs without separation. Log axes: non-positive
+## fluxes are not shown.
+plt_ch4 <- ggplot(ch4, aes(flux_no_separation, flux_total, size = ebullition_contribution)) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey40", linewidth = 0.4) +
+  geom_point(alpha = 0.75, shape = 21, fill = "#F2B876", colour = "#E29338", stroke = 0.5) +
+  scale_x_log10() + scale_y_log10() +
   scale_size_continuous(name = lab_s, range = c(1.5, 4),
                         labels = scales::percent_format(accuracy = 1)) +
   coord_fixed() +
-  labs(x = lab_x, y = lab_y) +
-  theme_article() +
-  theme(
-    legend.position      = c(0.02, 0.98),
-    legend.justification = c(0, 1),
-    legend.background    = element_rect(fill = alpha("white", 0.75), colour = NA),
-    legend.title         = element_text(size = 9, lineheight = 0.9),
-    legend.text          = element_text(size = 8),
-    legend.key.height    = unit(0.9, "lines"),
-    axis.title           = element_text(lineheight = 1.0)
-  )
+  labs(x = expression(atop(F[CH[4]~tot]^goFlux*" [nmol "*m^-2*" "*s^-1*"]",
+                           "no flux separation")),
+       y = expression(atop(F[CH[4]~tot]^goAquaFlux*" [nmol "*m^-2*" "*s^-1*"]",
+                           "with flux separation"))) +
+  theme_fig4
 
-
-# how many incubations show ebullition ratio > 10%?
-length(which(CH4_goAquaFlux_sel$ebullition_contribution>0.1))
-length(CH4_goAquaFlux_sel$UniqueID)
-
-
-
-
-
-
-# ------- CO2 flux
-
-
-
-CO2_goAquaFlux$best.flux_no_separation = CO2_goFlux$best.flux
-CO2_goAquaFlux$LM.flux_no_separation = CO2_goFlux$LM.flux
-
-# CO2_goAquaFlux$UniqueID[which(CO2_goAquaFlux$flux_total<0)]
-
-
-CO2_goAquaFlux_sel <- CO2_goAquaFlux#[abs(CO2_goAquaFlux$flux_diffusive)>1e-5,]
-# CO2_goAquaFlux_sel <- CO2_goAquaFlux_sel[!is.na(CO2_goAquaFlux_sel$flux_total),]
-
-CO2_goAquaFlux_sel$ebullition_contribution <- CH4_goAquaFlux_sel$ebullition_contribution[match(CO2_goAquaFlux_sel$UniqueID, 
-                                                                                               CH4_goAquaFlux_sel$UniqueID)]
-
-lab_x <- expression(atop(F[CO[2]]^goFlux*" [mmol "*m^-2*" "*s^-1*"]",
-                         "no flux separation"))
-lab_y <- expression(atop(F[CO[2]]^goAquaFlux*" [mmol "*m^-2*" "*s^-1*"]",
-                         "with flux separation"))
-lab_s <- expression(atop("Ebullition ratio",
-                         F[CH[4]~ebull]^goAquaFlux*" / "*F[CH[4]~tot]^goAquaFlux))
-
-plt_co2 <- ggplot(CO2_goAquaFlux_sel[CO2_goAquaFlux_sel$flux_total>1e-5,],
-                  aes(abs(best.flux_no_separation), abs(flux_diffusive), size = ebullition_contribution)) +
-  geom_abline(slope = 1, intercept = 0,
-              # linetype = "dashed",
-              colour = "grey40", linewidth = 0.4) +
-  geom_point(alpha = 0.75, shape = 21, fill = "#1C7293", colour = "#0D4861",
-             stroke = 0.5) +
-  scale_x_log10() +
-  scale_y_log10() +
+## (b) CO2: diffusive flux (goAquaFlux) vs conventional flux. CO2 fluxes can
+## be negative (uptake); incubations with a total CO2 flux <= 1e-5 are not
+## shown, and absolute values are plotted on log axes.
+plt_co2 <- ggplot(co2[!is.na(co2$flux_total) & co2$flux_total > 1e-5, ],
+                  aes(abs(flux_no_separation), abs(flux_diffusive),
+                      size = ebullition_contribution)) +
+  geom_abline(slope = 1, intercept = 0, colour = "grey40", linewidth = 0.4) +
+  geom_point(alpha = 0.75, shape = 21, fill = "#1C7293", colour = "#0D4861", stroke = 0.5) +
+  scale_x_log10() + scale_y_log10() +
   scale_size_continuous(name = lab_s, range = c(1.5, 4),
                         labels = scales::percent_format(accuracy = 1)) +
   coord_fixed() +
-  labs(x = lab_x, y = lab_y) +
-  theme_article() +
-  theme(
-    legend.position      = c(0.02, 0.98),
-    legend.justification = c(0, 1),
-    legend.background    = element_rect(fill = alpha("white", 0.75), colour = NA),
-    legend.title         = element_text(size = 9, lineheight = 0.9),
-    legend.text          = element_text(size = 8),
-    legend.key.height    = unit(0.9, "lines"),
-    axis.title           = element_text(lineheight = 1.0)
-  )
+  labs(x = expression(atop(F[CO[2]]^goFlux*" ["*mu*"mol "*m^-2*" "*s^-1*"]",
+                           "no flux separation")),
+       y = expression(atop(F[CO[2]]^goAquaFlux*" ["*mu*"mol "*m^-2*" "*s^-1*"]",
+                           "with flux separation"))) +
+  theme_fig4
 
+fig4 <- ggpubr::ggarrange(plt_ch4, plt_co2, nrow = 1, labels = c("a", "b"),
+                          align = "h", common.legend = TRUE, legend = "bottom")
 
-# how many incubations show ebullition ratio > 10%?
-length(which(CO2_goAquaFlux_sel$ebullition_contribution>0.1))
-length(CO2_goAquaFlux_sel$UniqueID)
-
-
-
-plt <- ggpubr::ggarrange( plt_ch4, plt_co2,
-                         nrow = 1, labels = c("a","b"), 
-                         align = "h", common.legend = T, legend = "bottom")
-
-plt
-
-ggsave(plot = plt, filename = "Fig3_goFlux_vs_goAquaFlux_R4Cs.jpeg", path = results_path,
-       width = 6, height = 3.2, dpi = 300, units = 'in', scale = 1.2)
-
-
-
-
-
-# -----------------
-
-
-library(dplyr)
-library(ggplot2)
-library(egg)
-
-d_ch4 <- CH4_goAquaFlux_sel %>%
-  # filter(best.flux_no_separation > 0, flux_total > 0) %>%
-  mutate(
-    ratio = flux_total / best.flux_no_separation,
-    # keep the exact zeros as their own group; collapse the sparse upper tail
-    eb_bin = cut(ebullition_contribution,
-                 breaks = c(-Inf, 0, 1),
-                 labels = c("0\n(none)", ">0"),
-                 # breaks = c(-Inf, 0, 0.25, 0.5, 0.75, 1),
-                 # labels = c("0\n(none)", "0-0.25", "0.25-0.5", "0.5-0.75",
-                 #            "0.75-1"),
-                 include.lowest = TRUE),
-  )
-
-n_lab <- d_ch4 %>% count(eb_bin) %>% mutate(lab = paste0("n = ", n))
-
-plt_ratios_ch4 <- ggplot(d_ch4, aes(eb_bin, ratio)) +
-  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
-  geom_boxplot(outlier.shape = NA, width = 0.55,
-               fill = "#F2B876", colour = "grey30", linewidth = 0.35) +
-  geom_jitter(width = 0.14, height = 0,
-              alpha = 0.6, size = 1.6) +
-  geom_text(data = n_lab, aes(x = eb_bin, y = Inf, label = lab),
-            vjust = 1.4, size = 2.8, colour = "grey35", inherit.aes = FALSE) +
-  scale_y_log10() +
-  labs(
-    x = expression(atop("Ebullition ratio",
-                        F[CH[4]~ebull]^goAquaFlux*" / "*F[CH[4]~tot]^goAquaFlux)),
-    y = expression(atop(F[CH[4]~tot]^goAquaFlux*" / "*F[CH[4]~tot]^goFlux,
-                        "(flux ratio, with / without separation)"))
-  ) +
-  theme_article() +
-  theme(axis.title = element_text(lineheight = 1.0),
-        legend.position = c(0.02, 0.98),
-        legend.justification = c(0, 1),
-        legend.title = element_text(size = 8, lineheight = 0.9),
-        legend.text = element_text(size = 8))
-
-
-
-
-d_co2 <- CO2_goAquaFlux_sel %>%
-  mutate(
-    ratio = abs(flux_diffusive) / abs(best.flux_no_separation),
-    # keep the exact zeros as their own group; collapse the sparse upper tail
-    eb_bin = cut(ebullition_contribution,
-                 breaks = c(-Inf, 0, 1),
-                 labels = c("0\n(none)", ">0"),
-                 include.lowest = TRUE)
-  )
-
-n_lab_co2 <- d_co2 %>% count(eb_bin) %>% mutate(lab = paste0("n = ", n))
-
-plt_ratios_co2 <- ggplot(d_co2, aes(eb_bin, ratio)) +
-  geom_hline(yintercept = 1, linetype = "dashed", colour = "grey40") +
-  geom_boxplot(outlier.shape = NA, width = 0.55,
-               fill = "#E8F0F4", colour = "grey30", linewidth = 0.35) +
-  geom_jitter(width = 0.14, height = 0,
-              alpha = 0.6, size = 1.6) +
-  geom_text(data = n_lab_co2, aes(x = eb_bin, y = Inf, label = lab),
-            vjust = 1.4, size = 2.8, colour = "grey35", inherit.aes = FALSE) +
-  scale_y_log10() +
-  labs(
-    x = expression(atop("Ebullition ratio",
-                        F[CH[4]~ebull]^goAquaFlux*" / "*F[CH[4]~tot]^goAquaFlux)),
-    y = expression(atop(F[CO2[2]]^goAquaFlux*" / "*F[CO2[2]]^goFlux,
-                        "(flux ratio, with / without separation)"))
-  ) +
-  theme_article() +
-  theme(axis.title = element_text(lineheight = 1.0),
-        legend.position = c(0.02, 0.98),
-        legend.justification = c(0, 1),
-        legend.title = element_text(size = 8, lineheight = 0.9),
-        legend.text = element_text(size = 8))
-
-
-
-plt <- ggpubr::ggarrange(plt_ratios_co2, plt_ratios_ch4,
-                         nrow = 1, labels = c("a","b"), 
-                         align = "h", common.legend = T, legend = "bottom")
-
-plt
+ggsave(plot = fig4, filename = "Fig4_goFlux_vs_goAquaFlux.jpeg", path = PATHS$figures,
+       width = 6, height = 3.2, units = "in", scale = 1.2, dpi = 300)
+ggsave(plot = fig4, filename = "Fig4_goFlux_vs_goAquaFlux.svg", path = PATHS$figures,
+       width = 6, height = 3.2, units = "in", scale = 1.2)
+cat("Figure 4 written to", PATHS$figures, "\n")
