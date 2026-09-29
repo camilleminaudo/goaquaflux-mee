@@ -80,46 +80,6 @@ p_sep_co2 <- flux.plot.aqua(
 
 
 
-flux_NO_sep_ch4 <- goAquaFlux(dataframe = IDed, gastype = "CH4dry_ppb",
-                              use_bubble_detection = F, bubble.method = "diff", bubble_gas = "CH4dry_ppb")
-
-flux_NO_sep_co2 <- goAquaFlux(dataframe = IDed, gastype = "CO2dry_ppm",
-                              use_bubble_detection = F, bubble.method = "diff", bubble_gas = "CH4dry_ppb")
-
-# Create plots
-p_NO_sep_ch4 <- flux.plot.aqua(
-  flux.results = flux_NO_sep_ch4,
-  dataframe = IDed,
-  gastype = "CH4dry_ppb",
-  plot.display = NULL)
-
-p_NO_sep_co2 <- flux.plot.aqua(
-  flux.results = flux_NO_sep_co2,
-  dataframe = IDed,
-  gastype = "CO2dry_ppm",
-  plot.display = NULL)
-
-
-
-p_sep_ch4_notitle <- lapply(p_sep_ch4, function(p) p + labs(title = NULL))
-p_NO_sep_ch4_notitle <- lapply(p_NO_sep_ch4, function(p) p + labs(title = NULL))
-p_sep_co2_notitle <- lapply(p_sep_co2, function(p) p + labs(title = NULL))
-p_NO_sep_co2_notitle <- lapply(p_NO_sep_co2, function(p) p + labs(title = NULL))
-
-
-
-
-
-
-ggsave(plot = p_sep_ch4_notitle[1], filename = "Fig2a_chosen_incubation.svg", path = results_path,
-       width = 5, height = 3.5, dpi = 300, units = 'in', scale = 1)
-
-
-ggsave(plot = p_sep_co2_notitle[1], filename = "Fig2b_chosen_incubation.svg", path = results_path,
-       width = 5, height = 3.5, dpi = 300, units = 'in', scale = 1)
-
-
-
 library(patchwork)
 setwd(repo_root)
 source("R/combine_aqua_plots.R")
@@ -144,10 +104,10 @@ ggsave(plot = fig2, filename = "Fig2_chosen_incubation.jpeg", path = results_pat
 
 
 
-fig <- wrap_plots(c(p_NO_sep_ch4_notitle[1],p_sep_ch4_notitle[1],
-                    p_NO_sep_co2_notitle[1],p_sep_co2_notitle[1]), ncol = 2) +
-  plot_layout(guides = "collect", tag_level = "new") &
-  theme(legend.position = "bottom")
+# flux_NO_sep_ch4 <- goAquaFlux(dataframe = IDed, gastype = "CH4dry_ppb",
+#                               use_bubble_detection = F, bubble.method = "diff", bubble_gas = "CH4dry_ppb")
+#
+# flux_NO_sep_co2 <- goAquaFlux(dataframe = IDed, gastype = "CO2dry_ppm",
+#                               use_bubble_detection = F, bubble.method = "diff", bubble_gas = "CH4dry_ppb")
 
-fig2 <- fig + plot_annotation(tag_levels = "a")
 
