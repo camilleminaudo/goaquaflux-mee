@@ -38,10 +38,10 @@ myauxfile$obs.length <- myauxfile$duration
 
 selct <- c(
   # "s1-da-p1-8-o-d-10:05",
-  "s1-cu-a2-1-o-d-06:36"#,   # chosen example for publication
   # "s1-cu-a2-16-o-d-11:58",
   # "s3-ca-r1-1-o-d-07:46",
-  # "s2-ri-a2-15-o-d-11:56"
+  # "s2-ri-a2-15-o-d-11:56",
+  "s1-cu-a2-1-o-d-06:36"   # chosen example for publication
 )
 
 myaux <- myauxfile[which(myauxfile$UniqueID %in% selct),]
@@ -107,17 +107,38 @@ p_sep_co2_notitle <- lapply(p_sep_co2, function(p) p + labs(title = NULL))
 p_NO_sep_co2_notitle <- lapply(p_NO_sep_co2, function(p) p + labs(title = NULL))
 
 
+
+
+
+
+ggsave(plot = p_sep_ch4_notitle[1], filename = "Fig2a_chosen_incubation.svg", path = results_path,
+       width = 5, height = 3.5, dpi = 300, units = 'in', scale = 1)
+
+
+ggsave(plot = p_sep_co2_notitle[1], filename = "Fig2b_chosen_incubation.svg", path = results_path,
+       width = 5, height = 3.5, dpi = 300, units = 'in', scale = 1)
+
+
+
 library(patchwork)
+setwd(repo_root)
+source("R/combine_aqua_plots.R")
 
-fig <- wrap_plots(c(p_sep_ch4_notitle[1],
-                    p_sep_co2_notitle[1]), ncol = 2) +
-  plot_layout(guides = "collect", tag_level = "new") &
-  theme(legend.position = "bottom")
+fig <- combine_aqua_plots(list(p_sep_ch4_notitle[[1]], p_sep_co2_notitle[[1]]),
+                          ncol = 2)
 
-fig2 <- fig + plot_annotation(tag_levels = "a")
+
+
+# the legend counts as a third element, so give it an empty tag
+fig2 <- fig + plot_annotation(tag_levels = list(c("a", "b", "")))
+
+
 
 
 ggsave(plot = fig2, filename = "Fig2_chosen_incubation.svg", path = results_path,
+       width = 8, height = 3.5, dpi = 300, units = 'in', scale = 1)
+
+ggsave(plot = fig2, filename = "Fig2_chosen_incubation.jpeg", path = results_path,
        width = 8, height = 3.5, dpi = 300, units = 'in', scale = 1)
 
 
