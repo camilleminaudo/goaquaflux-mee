@@ -49,6 +49,15 @@ if (!exists("goAquaFlux", mode = "function")) {
        "README.md, or set GOFLUX_DIR to a local clone of goFlux.", call. = FALSE)
 }
 
+## Internal goFlux functions used by the benchmark scripts. They are not
+## exported by the package, so they are not visible after library(goFlux)
+## (devtools::load_all() exposes them); they are taken from its namespace.
+##   flux.term()    : chamber flux term (compare_goAquaFlux_FluxSeparator_MSP.R)
+##   find.bubbles() : bubble detection   (compare_bubble_detection.R)
+for (fn in c("flux.term", "find.bubbles")) {
+  if (!exists(fn, mode = "function")) assign(fn, utils::getFromNamespace(fn, "goFlux"))
+}
+
 ## ---- 4. Shared settings ---------------------------------------------------------
 ## Width (observations on the 1-s grid) of the rolling window used by
 ## find.bubbles() to detect ebullition. It is passed explicitly in every call
