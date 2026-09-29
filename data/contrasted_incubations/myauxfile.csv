@@ -1,4 +1,0 @@
-subsite,UniqueID,gas_analiser,start.time,obs.length,water_depth_cm,Area,Vtot,Tcham,Pcham,strata,chamberType,lightCondition
-S1-DA-P1,s1-da-p1-8-o-d-10:05,LI-COR,10/10/2023 10:05:56,418,220,14365.4439,57.5,13.92197835,100.1,open water,floating,dark
-S1-CU-R1,s1-cu-r1-5-o-d-07:22,Los Gatos,06/10/2023 07:22:31,656,140,14365.4439,57.5,17.26709928,100.1,open water,floating,dark
-S1-CU-A2,s1-cu-a2-16-o-d-11:58,LI-COR,04/10/2023 11:59:09,710,80,14365.4439,57.5,15.16537467,100.1,open water,floating,dark
