@@ -53,11 +53,11 @@ setwd(repo_root)
 
 CFG <- list(
 
-  run_synthetic = FALSE,
+  run_synthetic = TRUE,
   run_real      = TRUE,
   recompute     = TRUE,     # FALSE: reload saved results and only redo stats/figures
 
-  out_dir = "C:/Projects/myGit/goaquaflux-mee/results/method_comparison_real_incubations",
+  out_dir = "C:/Projects/myGit/goaquaflux-mee/results/method_comparison",
 
   ## --- code sources ---------------------------------------------------------
   goflux_dir    = "C:/Projects/myGit/goFlux",   # devtools::load_all(); NULL -> library(goFlux)
