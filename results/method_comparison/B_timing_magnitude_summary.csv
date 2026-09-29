@@ -1,0 +1,4 @@
+"method","n_matched","med_timing_err_s","mad_timing_err_s","med_mag_rel_err","med_abs_mag_rel_err"
+"goAquaFlux",8882,2,1.4826,0.000541072958794304,0.0251549606089104
+"FS_default",1563,2,1.4826,0.2681041721601,0.2681041721601
+"MSP",10313,8,1.4826,-0.978270572394301,0.989168775740839
